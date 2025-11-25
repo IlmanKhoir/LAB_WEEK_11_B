@@ -1,0 +1,76 @@
+
+1) Ketika pengguna mengambil foto, foto tersebut disimpan pada path yang ditentukan berdasarkan URI yang diberikan.
+    Bagian kode mana yang menangani ini? (salin potongan kode)
+
+    Bagian kode yang menghasilkan URI FileProvider untuk file dan meluncurkan kamera ada pada
+    ProviderFileManager.generatePhotoUri dan MainActivity.openImageCapture.
+
+    ProviderFileManager.generatePhotoUri (membuat FileInfo dengan file + URI FileProvider):
+
+   fun generatePhotoUri(time: Long): FileInfo {
+       val name = "img_\u007ftime.jpg".replace("\u007f", "$time")
+       val file = File(context.getExternalFilesDir(fileHelper.getPicturesFolder()), name)
+       return FileInfo(
+           uri = fileHelper.getUriFromFile(file),
+           file = file,
+           name = name,
+           relativePath = fileHelper.getPicturesFolder(),
+           mimeType = "image/jpeg"
+       )
+   }
+
+    MainActivity.openImageCapture
+
+   private fun openImageCapture() {
+       photoInfo = providerFileManager.generatePhotoUri(System.currentTimeMillis())
+       photoInfo?.let { takePictureLauncher.launch(it.uri) }
+   }
+
+
+
+2) Di `FileInfo.kt` terdapat 5 atribut.
+     - Pada atribut pertama, URI merujuk ke apa?
+         Jawaban: Atribut pertama `uri: Uri` adalah URI dari FileProvider yang menunjuk ke lokasi file tempat aplikasi kamera akan menulis hasil foto. URI ini dihasilkan oleh FileProvider.getUriForFile dan dipakai oleh aplikasi kamera untuk menyimpan gambar yang diambil ke dalam direktori file eksternal aplikasi.
+
+     - Pada atribut keempat, `relativePath` merujuk ke apa?
+         Jawaban: Atribut keempat `relativePath: String` menunjuk ke path relatif yang digunakan ketika memasukkan file ke MediaStore. Pada Android Q (API 29) dan lebih tinggi, nilai ini disimpan sebagai RELATIVE_PATH pada MediaStore sehingga file berakhir di folder Pictures/ atau Movies/ yang dapat dilihat oleh aplikasi galeri.
+
+
+
+3) [Bonus] Jelaskan urutan kronologis dari saat pengguna mengambil foto sampai file tersimpan di MediaStore.
+
+     Urutan kronologis:
+     - `MainActivity` membuat sebuah `FileInfo` untuk foto baru melalui `ProviderFileManager.generatePhotoUri()`,
+         * membuat objek `File` di dalam direktori external files 
+         * mendapatkan `uri` FileProvider lewat FileProvider.getUriForFile sehingga aplikasi kamera dapat menulis ke file tersebut
+         * menyimpan metadata seperti `relativePath` dan `mimeType` di objek `FileInfo`
+
+     - `MainActivity` memanggil Activity Result Launcher `TakePicture` yang sudah didaftarkan dan meneruskan URI FileProvider ke aplikasi kamera.
+         Aplikasi kamera menerima URI itu dan menulis byte hasil foto ke file yang direpresentasikan oleh URI.
+
+     - Setelah kamera mengembalikan hasil sukses, `MainActivity` memanggil `ProviderFileManager.insertImageToStore(photoInfo)` untuk memindahkan / menyalin gambar ke MediaStore sehingga menjadi tersedia untuk aplikasi lain.
+         * `insertImageToStore` memanggil `insertToStore` yang melakukan `contentResolver.insert(contentUri, contentValues)` untuk membuat entri baru di MediaStore dan mendapatkan `insertedUri` tujuan.
+         * Selanjutnya dibuka `InputStream` dari `fileInfo.uri` (file yang dibuat oleh kamera) dan `OutputStream` untuk `insertedUri` pada MediaStore.
+         * Isi dari input stream kemudian disalin ke output stream MediaStore, sehingga salinan gambar tersimpan di MediaStore dan muncul pada galeri.
+
+     - Secara opsional, aplikasi melakukan pengecekan permission (WRITE_EXTERNAL_STORAGE) untuk perangkat Android versi sebelum Q agar dapat menulis ke penyimpanan eksternal.
+
+     Potongan kode yang melakukan penyalinan ke MediaStore (insertToStore):
+
+   private fun insertToStore(fileInfo: FileInfo, contentUri: Uri, contentValues: ContentValues) {
+       executor.execute {
+           try {
+               val insertedUri = contentResolver.insert(contentUri, contentValues)
+               if (insertedUri != null) {
+                   contentResolver.openInputStream(fileInfo.uri)?.use { inputStream ->
+                       contentResolver.openOutputStream(insertedUri)?.use { outputStream ->
+                           inputStream.copyTo(outputStream)
+                       }
+                   }
+               }
+           } catch (t: Throwable) {
+               Log.e("ProviderFileManager", "failed to insert to MediaStore", t)
+           }
+       }
+   }
+
